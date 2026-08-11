@@ -6,11 +6,13 @@ import asyncio
 import logging
 import urllib3
 import httpx
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from groq import AsyncGroq
 from fastapi import FastAPI, HTTPException
 
+# Load environment variables from .env
 load_dotenv()
 
 logging.basicConfig(
@@ -44,7 +46,7 @@ class TelegraphMiner:
             logging.error("GROQ_API_KEY not found! Set it in your .env file.")
             sys.exit(1)
 
-        self.secret_key = os.getenv("MINER_SECRET_KEY", "default_telegraph_secret").encode("utf-8")
+        self.secret_key = os.getenv("MINER_SECRET_KEY", "telegraph_secret_key_node_01_change_in_production").encode("utf-8")
 
         ssl_env = os.getenv("SSL_VERIFY", "true").lower()
         self.verify_ssl = ssl_env in ("true", "1", "yes")
@@ -68,8 +70,8 @@ class TelegraphMiner:
         logging.info(f"Initialized Telegraph Miner [{self.miner_id}] | Model: {self.model_name} | Mode: {mode}")
 
     def generate_signature(self, task_id: str, output: str, latency_ms: float) -> str:
-        """Generates an HMAC-SHA256 signature across key inference metrics."""
-        payload = f"{task_id}:{self.miner_id}:{output}:{latency_ms}".encode("utf-8")
+        """Generates an HMAC-SHA256 signature forcing exact 2 decimal places on latency."""
+        payload = f"{task_id}:{self.miner_id}:{output}:{latency_ms:.2f}".encode("utf-8")
         return hmac.new(self.secret_key, payload, hashlib.sha256).hexdigest()
 
     async def process_inference(self, request: InferenceRequest) -> InferenceResponse:
@@ -90,7 +92,7 @@ class TelegraphMiner:
             output_text = completion.choices[0].message.content
             latency = round((asyncio.get_running_loop().time() - start_time) * 1000, 2)
             
-            # Sign output
+            # Sign output with deterministic 2-decimal formatting
             signature = self.generate_signature(request.task_id, output_text, latency)
 
             return InferenceResponse(
@@ -108,9 +110,21 @@ class TelegraphMiner:
     async def close(self):
         await self.http_client.aclose()
 
-# FastAPI Initialization
-app = FastAPI(title="Telegraph Miner Node API", version="1.1.0")
+# Global miner instance
 miner_node = TelegraphMiner()
+
+# Lifespan Context Manager (replaces deprecated on_event)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await miner_node.close()
+
+# FastAPI App Setup
+app = FastAPI(
+    title="Telegraph Miner Node API",
+    version="1.1.0",
+    lifespan=lifespan
+)
 
 @app.get("/health")
 async def health_check():
