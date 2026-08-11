@@ -7,28 +7,30 @@ A high-performance, asynchronous miner node engineered for Telegraph Protocol's 
 
 ## System Architecture
 - **Control Plane:** Python 3.11+ using `asyncio`, `FastAPI`, & `uvloop` for low-latency network I/O and HTTP REST interface.
-- **Data Plane:** Groq LPU API backend (compatible with `vLLM` / local `llama.cpp` model wrappers) running `llama-3.1-8b-instant`.
+- **Data Plane:** Groq LPU API backend running `llama-3.1-8b-instant` (compatible with `vLLM` / local `llama.cpp` wrappers).
 - **Resilience Engine:** Dual-mode HTTP client supporting automatic SSL validation fallback for restricted proxy / VPN network environments.
-- **Verification Layer:** Deterministic signal signature and response timing tracking (`latency_ms`).
+- **Verification Layer:** Deterministic HMAC-SHA256 signal signature and response timing tracking (`latency_ms`).
 
 ---
 
 ## Features
-- **Low Latency:** Asynchronous execution pipeline delivering sub-second response times (~200–900ms).
-- **Dual Runtime:** Can be run as a standalone CLI script or exposed as an OpenAPI-compliant REST API microservice.
-- **Network Resilience:** Handles corporate firewalls, VPN proxies, and missing root CA certificate stores without crashing.
+- **Sub-Second Latency:** Asynchronous execution pipeline delivering verified inference responses in ~200–900ms.
+- **Cryptographic Attestation:** Every response payload is HMAC-SHA256 signed for protocol validator verification.
+- **Dual Runtime Options:** Can be executed natively via Python or containerized via Docker/Podman.
+- **Network Resilience:** Handles corporate firewalls, VPN proxies, and missing root CA certificate stores smoothly.
 - **Interactive OpenAPI Docs:** Built-in Swagger UI for testing endpoints at `/docs`.
 
 ---
 
-## Getting Started
+## Repository Structure
 
-### Prerequisites
-- Python 3.10 or higher
-- Groq API Key ([Get a free key here](https://console.groq.com))
-
-### Installation
-```bash
-git clone [https://github.com/YOUR_GITHUB_USERNAME/telegraph-miner-node.git](https://github.com/YOUR_GITHUB_USERNAME/telegraph-miner-node.git)
-cd telegraph-miner-node
-pip install -r requirements.txt
+```text
+telegraph-miner-node/
+├── src/
+│   ├── miner.py          # Core FastAPI server & Async Groq client engine
+│   └── validator_test.py # Standalone verification script for network validators
+├── Dockerfile            # Container build instructions
+├── .env.example          # Environment variables template
+├── .gitignore            # Ignores local secrets and cache files
+├── requirements.txt      # Python dependencies
+└── README.md             # Project documentation
