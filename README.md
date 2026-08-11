@@ -1,36 +1,33 @@
-# Telegraph Protocol Miner Node (Track 1)
+# Telegraph Protocol — Track 1 Miner Node
 
-A high-performance, asynchronous miner node engineered for Telegraph Protocol's verified inference network.
-
-## Track
-**Track 1: Miners (Network Supply & Compute Layer)**
-
-## System Architecture
-- **Control Plane:** Python 3.11+ using `asyncio`, `FastAPI`, & `uvloop` for low-latency network I/O and HTTP REST interface.
-- **Data Plane:** Groq LPU API backend running `llama-3.1-8b-instant` (compatible with `vLLM` / local `llama.cpp` wrappers).
-- **Resilience Engine:** Dual-mode HTTP client supporting automatic SSL validation fallback for restricted proxy / VPN network environments.
-- **Verification Layer:** Deterministic HMAC-SHA256 signal signature and response timing tracking (`latency_ms`).
+An asynchronous, verified AI inference node built for the **Telegraph Protocol** network. This service processes inbound LLM tasks via FastAPI and Groq, returning cryptographic HMAC-SHA256 signatures to ensure verifiable compute execution.
 
 ---
 
-## Features
-- **Sub-Second Latency:** Asynchronous execution pipeline delivering verified inference responses in ~200–900ms.
-- **Cryptographic Attestation:** Every response payload is HMAC-SHA256 signed for protocol validator verification.
-- **Dual Runtime Options:** Can be executed natively via Python or containerized via Docker/Podman.
-- **Network Resilience:** Handles corporate firewalls, VPN proxies, and missing root CA certificate stores smoothly.
-- **Interactive OpenAPI Docs:** Built-in Swagger UI for testing endpoints at `/docs`.
+## Key Features
+
+- **FastAPI Core**: Lightweight, asynchronous web backend providing `/v1/inference` and `/health` endpoints.
+- **Groq LPU Acceleration**: Utilizes `llama-3.1-8b-instant` for ultra-low latency response generation.
+- **Cryptographic Attestation**: Signs task output and execution latency with HMAC-SHA256 to ensure data authenticity.
+- **Network & Proxy Compatibility**: Configurable SSL verification (`SSL_VERIFY`) for seamless deployment across WSL2, local enterprise firewalls, and proxy setups.
+- **Modern Lifecycle**: Configured with FastAPI `lifespan` context handlers for clean connection management.
 
 ---
 
-## Repository Structure
+## Prerequisites
 
-```text
-telegraph-miner-node/
-├── src/
-│   ├── miner.py          # Core FastAPI server & Async Groq client engine
-│   └── validator_test.py # Standalone verification script for network validators
-├── Dockerfile            # Container build instructions
-├── .env.example          # Environment variables template
-├── .gitignore            # Ignores local secrets and cache files
-├── requirements.txt      # Python dependencies
-└── README.md             # Project documentation
+- Python 3.10 or higher
+- A [Groq API Key](https://console.groq.com/)
+- Docker (optional, for containerized execution)
+
+---
+
+## Environment Configuration
+
+Create a `.env` file in the root directory:
+
+```env
+GROQ_API_KEY=your_groq_api_key_here
+MINER_SECRET_KEY=telegraph_secret_key_node_01_change_in_production
+SSL_VERIFY=false
+GROQ_TIMEOUT=60.0
