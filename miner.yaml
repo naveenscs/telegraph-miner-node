@@ -1,27 +1,20 @@
-version: "1"
-kind: miner
-id: "telegraph-groq-miner-node01"
-slug: "groq-llama3-1-miner"
-protocol: "1.0"
-name: "Telegraph Groq LPU Miner"
-
-auth:
-  type: "none"
-
-base_url: "https://your-public-node-domain.com"
-
-endpoints:
-  - name: "chat_completion"
-    path: "/v1/chat/completions"
-    external_path: "/v1/chat/completions"
-    method: "POST"
-    intent: "CHAT_COMPLETION"
+id: 901
+name: "telegraph-groq-miner-node01"
+protocol: "generic"
+base_url: "https://your-live-domain.com" # Replace with your real public HTTPS URL (e.g., ngrok/cloudflared/VPS)
 
 semantics:
+  supported_intents:
+    - "CHAT_COMPLETION"
   signal_mapping:
-    output_field: "choices[0].message.content"
-    confidence_field: "usage.total_tokens"
-    reasoning_field: "choices[0].finish_reason"
+    label_field: "choices[0].message.content"
+    confidence_field: "confidence"
+    reason_field: "reason"
 
-pricing:
-  min_price_usdc: 0.001
+on_chain:
+  transform: "none"
+  min_price_usdc: 0.01
+
+endpoints:
+  - path: "/v1/chat/completions"
+    method: "POST"
