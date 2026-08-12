@@ -1,0 +1,13 @@
+version: "1.0"
+miner:
+  name: "telegraph-groq-miner-node01"
+  description: "High-performance Groq LPU powered miner node for Telegraph Network"
+base_url: "https://<YOUR-PUBLIC-DOMAIN-OR-NGROK>.ngrok-free.app"
+endpoints:
+  chat_completion: "/v1/chat/completions"
+  health: "/health"
+supported_intents:
+  - CHAT_COMPLETION
+pricing:
+  currency: "ETH"
+  per_token: "0.000000"
