@@ -1,20 +1,19 @@
 id: 901
 name: "telegraph-groq-miner-node01"
+description: "Groq LLaMA3 inference miner for Telegraph Protocol"
 protocol: "generic"
-base_url: "https://your-live-domain.com" # Replace with your real public HTTPS URL (e.g., ngrok/cloudflared/VPS)
+base_url: "https://your-public-node-domain.com" # Replace with your HTTPS URL
 
 semantics:
   supported_intents:
     - "CHAT_COMPLETION"
-  signal_mapping:
-    label_field: "choices[0].message.content"
-    confidence_field: "confidence"
-    reason_field: "reason"
+  label_field: "choices.0.message.content"
+  confidence_field: "confidence"
+  reason_field: "reason"
 
-on_chain:
-  transform: "none"
+pricing:
   min_price_usdc: 0.01
 
-endpoints:
-  - path: "/v1/chat/completions"
-    method: "POST"
+on_chain:
+  min_price_usdc: 0.01
+  transform: "none"
