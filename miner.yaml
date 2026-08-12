@@ -1,13 +1,13 @@
 version: "1"
-kind: "miner"
+kind: miner
 id: 901
-name: "telegraph-groq-miner-node01"
 slug: "groq-llama31-instant-miner"
+name: "Telegraph Groq LPU Miner"
 protocol: "generic"
-base_url: "https://your-public-node-domain.com" # Replace with your real public HTTPS URL
-
 auth:
   type: "none"
+
+base_url: "https://your-public-node-domain.com" # Replace with live HTTPS URL
 
 endpoints:
   - path: "/v1/chat/completions"
