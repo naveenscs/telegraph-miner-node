@@ -1,11 +1,12 @@
 # Telegraph Protocol Miner Registration Guide
 
 ## Prerequisites
-- Publicly accessible HTTPS endpoint (via cloud deployment, Ngrok, or Caddy/Nginx reverse proxy).
-- Base Sepolia wallet funded with ETH (for gas) and testnet USDC.
+- A publicly accessible HTTPS endpoint (via ngrok, VPS, or cloud deploy).
+- A Base Sepolia wallet funded with ETH (for gas).
 
-## Step 1: Compute Manifest Hash
-Generate the SHA-256 hash of your validated `miner.yaml`:
+---
 
-```bash
-sha256sum miner.yaml
+## Step 1: Deploy Node and Update `miner.yaml`
+1. Expose your node running on port 8000:
+   ```bash
+   ngrok http 8000
