@@ -1,27 +1,57 @@
 version: "1"
 kind: miner
 id: 901
-slug: "groq-llama31-instant-miner"
-name: "Telegraph Groq LPU Miner"
-protocol: "generic"
-auth:
-  type: "none"
+slug: groq-llama31-instant-miner
+protocol: generic
+name: Telegraph Groq LPU Miner
+description: High-throughput CHAT_COMPLETION miner powered by Groq llama-3.1-8b-instant.
 
-base_url: "https://your-public-node-domain.com" # Replace with live HTTPS URL
+# Replace with your live public HTTPS URL before registration
+base_url: https://your-public-node-domain.com
+
+docs:
+  repository: https://github.com/naveenscs/telegraph-miner-node
+  documentation: https://docs.telegraphprotocol.com/docs/miners/miner-overview
+  twitter: https://x.com/Telegraphprotoc
+
+auth:
+  type: none
+
+rate_limit_per_sec: 5
+circuit_threshold: 5
+circuit_cooldown_seconds: 30
 
 endpoints:
-  - path: "/v1/chat/completions"
-    external_path: "/v1/chat/completions"
-    method: "POST"
+  - path: /chat
+    external_path: /v1/chat/completions
+    method: POST
+    description: OpenAI-compatible chat completion for CHAT_COMPLETION intent
+    content_type: application/json
 
 semantics:
-  supported_intents:
-    - "CHAT_COMPLETION"
   signal_mapping:
-    label_field: "output"
-    confidence_field: "confidence"
-    reason_field: "reason"
+    label_field: output
+    confidence_field: confidence
+    reason_field: reason
+  supported_intents:
+    - CHAT_COMPLETION
 
 on_chain:
+  transform: direct
   min_price_usdc: 0.01
-  transform: "direct"
+  fields:
+    strings:
+      - index: 0
+        name: output
+        source_path: output
+    integers:
+      - index: 0
+        name: confidence_x10000
+        source_path: confidence
+        multiplier: 10000
+  request:
+    - endpoint: chat
+      method: POST
+      body:
+        messages: { source: strings.0, format: chat_messages }
+        max_tokens: { source: numbers.0, optional: true }
