@@ -1,10 +1,11 @@
-# Telegraph Protocol On-Chain Registration Guide
+# Telegraph Protocol Miner Registration Guide
 
-### 1. Host `miner.yaml`
-Publish `miner.yaml` to a public web server or raw GitHub URL:
-`https://raw.githubusercontent.com/naveenscs/telegraph-miner-node/main/miner.yaml`
+## Prerequisites
+- Publicly accessible HTTPS endpoint (via cloud deployment, Ngrok, or Caddy/Nginx reverse proxy).
+- Base Sepolia wallet funded with ETH (for gas) and testnet USDC.
 
-### 2. Compute SHA-256 Hash
-Run locally:
+## Step 1: Compute Manifest Hash
+Generate the SHA-256 hash of your validated `miner.yaml`:
+
 ```bash
 sha256sum miner.yaml
