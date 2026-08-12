@@ -1,144 +1,111 @@
 import os
-import sys
-import hmac
-import hashlib
-import asyncio
-import logging
-import urllib3
+import time
 import httpx
-from contextlib import asynccontextmanager
-from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any, Union
 from groq import AsyncGroq
-from fastapi import FastAPI, HTTPException
 
-# Load environment variables from .env
-load_dotenv()
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - [%(levelname)s] - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
-
-# Request Schema
-class InferenceRequest(BaseModel):
-    task_id: str
-    prompt: str
-    max_tokens: int = Field(default=512, ge=1, le=4096)
-
-# Response Schema with Protocol Signature
-class InferenceResponse(BaseModel):
-    task_id: str
-    output: str
-    latency_ms: float
-    model_used: str
-    miner_id: str
-    signature: str  # HMAC-SHA256 signature for validator verification
-
-class TelegraphMiner:
-    def __init__(self, miner_id: str = "node-01", model_name: str = "llama-3.1-8b-instant"):
-        self.miner_id = miner_id
-        self.model_name = model_name
-        
-        api_key = os.getenv("GROQ_API_KEY")
-        if not api_key:
-            logging.error("GROQ_API_KEY not found! Set it in your .env file.")
-            sys.exit(1)
-
-        self.secret_key = os.getenv("MINER_SECRET_KEY", "telegraph_secret_key_node_01_change_in_production").encode("utf-8")
-
-        ssl_env = os.getenv("SSL_VERIFY", "true").lower()
-        self.verify_ssl = ssl_env in ("true", "1", "yes")
-        timeout_sec = float(os.getenv("GROQ_TIMEOUT", "60.0"))
-
-        if not self.verify_ssl:
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-        self.http_client = httpx.AsyncClient(
-            verify=self.verify_ssl,
-            timeout=httpx.Timeout(timeout_sec, connect=15.0),
-            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
-        )
-
-        self.client = AsyncGroq(
-            api_key=api_key,
-            http_client=self.http_client
-        )
-        
-        mode = "Strict SSL" if self.verify_ssl else "Permissive SSL (Bypass)"
-        logging.info(f"Initialized Telegraph Miner [{self.miner_id}] | Model: {self.model_name} | Mode: {mode}")
-
-    def generate_signature(self, task_id: str, output: str, latency_ms: float) -> str:
-        """Generates an HMAC-SHA256 signature forcing exact 2 decimal places on latency."""
-        payload = f"{task_id}:{self.miner_id}:{output}:{latency_ms:.2f}".encode("utf-8")
-        return hmac.new(self.secret_key, payload, hashlib.sha256).hexdigest()
-
-    async def process_inference(self, request: InferenceRequest) -> InferenceResponse:
-        start_time = asyncio.get_running_loop().time()
-        logging.info(f"[{self.miner_id}] Processing Task '{request.task_id}': {request.prompt[:40]}...")
-        
-        try:
-            completion = await self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[
-                    {"role": "system", "content": "You are a specialized AI inference node serving verified signals to the Telegraph Protocol network. Keep answers concise, factual, and analytical."},
-                    {"role": "user", "content": request.prompt}
-                ],
-                max_tokens=request.max_tokens,
-                temperature=0.2,
-            )
-            
-            output_text = completion.choices[0].message.content
-            latency = round((asyncio.get_running_loop().time() - start_time) * 1000, 2)
-            
-            # Sign output with deterministic 2-decimal formatting
-            signature = self.generate_signature(request.task_id, output_text, latency)
-
-            return InferenceResponse(
-                task_id=request.task_id,
-                output=output_text,
-                latency_ms=latency,
-                model_used=self.model_name,
-                miner_id=self.miner_id,
-                signature=signature
-            )
-        except Exception as e:
-            logging.error(f"Inference error: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Miner failure: {str(e)}")
-
-    async def close(self):
-        await self.http_client.aclose()
-
-# Global miner instance
-miner_node = TelegraphMiner()
-
-# Lifespan Context Manager (replaces deprecated on_event)
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    yield
-    await miner_node.close()
-
-# FastAPI App Setup
 app = FastAPI(
-    title="Telegraph Miner Node API",
-    version="1.1.0",
-    lifespan=lifespan
+    title="Telegraph Miner Node",
+    description="Track 1 Telegraph Protocol Miner powered by Groq LPU",
+    version="1.0.0"
 )
+
+# Enable CORS for decentralized validator and router origin access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Global Configuration
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+SSL_VERIFY = os.getenv("SSL_VERIFY", "true").lower() not in ("false", "0", "no")
+GROQ_TIMEOUT = float(os.getenv("GROQ_TIMEOUT", "60.0"))
+
+# Initialize Async Groq Client
+http_client = httpx.AsyncClient(verify=SSL_VERIFY, timeout=GROQ_TIMEOUT)
+client = AsyncGroq(api_key=GROQ_API_KEY, http_client=http_client)
+
+
+# Pydantic Schemas for Standard OpenAI Chat Completion
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatCompletionRequest(BaseModel):
+    model: Optional[str] = GROQ_MODEL
+    messages: List[ChatMessage]
+    temperature: Optional[float] = 0.7
+    max_tokens: Optional[int] = 1024
+    top_p: Optional[float] = 1.0
+    stream: Optional[bool] = False
+
 
 @app.get("/health")
 async def health_check():
+    """Health endpoint pinged by canonical monitoring scripts."""
     return {
         "status": "active",
-        "miner_id": miner_node.miner_id,
-        "model": miner_node.model_name,
-        "signing_enabled": True
+        "protocol": "telegraph",
+        "track": 1,
+        "supported_intents": ["CHAT_COMPLETION"],
+        "model": GROQ_MODEL
     }
 
-@app.post("/v1/inference", response_model=InferenceResponse)
-async def handle_inference(request: InferenceRequest):
-    return await miner_node.process_inference(request)
+
+@app.post("/v1/chat/completions")
+async def chat_completions(req: ChatCompletionRequest):
+    """Canonical Telegraph Intent: CHAT_COMPLETION (OpenAI Compatible API)."""
+    if not GROQ_API_KEY:
+        raise HTTPException(status_code=500, detail="GROQ_API_KEY is not configured on miner")
+
+    try:
+        formatted_messages = [{"role": msg.role, "content": msg.content} for msg in req.messages]
+
+        # Dispatch inference to Groq LPU
+        completion = await client.chat.completions.create(
+            messages=formatted_messages,
+            model=GROQ_MODEL,
+            temperature=req.temperature,
+            max_tokens=req.max_tokens,
+            top_p=req.top_p,
+            stream=False
+        )
+
+        # Return standard OpenAI completion structure required by validators
+        return {
+            "id": completion.id,
+            "object": "chat.completion",
+            "created": completion.created,
+            "model": completion.model,
+            "choices": [
+                {
+                    "index": choice.index,
+                    "message": {
+                        "role": choice.message.role,
+                        "content": choice.message.content
+                    },
+                    "finish_reason": choice.finish_reason
+                } for choice in completion.choices
+            ],
+            "usage": {
+                "prompt_tokens": completion.usage.prompt_tokens if completion.usage else 0,
+                "completion_tokens": completion.usage.completion_tokens if completion.usage else 0,
+                "total_tokens": completion.usage.total_tokens if completion.usage else 0
+            }
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Inference execution failed: {str(e)}")
+
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("miner:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("miner:app", host="0.0.0.0", port=8000, reload=False)
