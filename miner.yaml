@@ -1,13 +1,27 @@
-version: "1.0"
-miner:
-  name: "telegraph-groq-miner-node01"
-  description: "High-performance Groq LPU powered miner node for Telegraph Network"
-base_url: "https://<YOUR-PUBLIC-DOMAIN-OR-NGROK>.ngrok-free.app"
+version: "1"
+kind: miner
+id: "telegraph-groq-miner-node01"
+slug: "groq-llama3-1-miner"
+protocol: "1.0"
+name: "Telegraph Groq LPU Miner"
+
+auth:
+  type: "none"
+
+base_url: "https://your-public-node-domain.com"
+
 endpoints:
-  chat_completion: "/v1/chat/completions"
-  health: "/health"
-supported_intents:
-  - CHAT_COMPLETION
+  - name: "chat_completion"
+    path: "/v1/chat/completions"
+    external_path: "/v1/chat/completions"
+    method: "POST"
+    intent: "CHAT_COMPLETION"
+
+semantics:
+  signal_mapping:
+    output_field: "choices[0].message.content"
+    confidence_field: "usage.total_tokens"
+    reasoning_field: "choices[0].finish_reason"
+
 pricing:
-  currency: "ETH"
-  per_token: "0.000000"
+  min_price_usdc: 0.001
