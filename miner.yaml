@@ -1,19 +1,27 @@
+version: "1"
+kind: "miner"
 id: 901
 name: "telegraph-groq-miner-node01"
-description: "Groq LLaMA3 inference miner for Telegraph Protocol"
+slug: "groq-llama31-instant-miner"
 protocol: "generic"
-base_url: "https://your-public-node-domain.com" # Replace with your HTTPS URL
+base_url: "https://your-public-node-domain.com" # Replace with your real public HTTPS URL
+
+auth:
+  type: "none"
+
+endpoints:
+  - path: "/v1/chat/completions"
+    external_path: "/v1/chat/completions"
+    method: "POST"
 
 semantics:
   supported_intents:
     - "CHAT_COMPLETION"
-  label_field: "choices.0.message.content"
-  confidence_field: "confidence"
-  reason_field: "reason"
-
-pricing:
-  min_price_usdc: 0.01
+  signal_mapping:
+    label_field: "output"
+    confidence_field: "confidence"
+    reason_field: "reason"
 
 on_chain:
   min_price_usdc: 0.01
-  transform: "none"
+  transform: "direct"
