@@ -1,10 +1,10 @@
 import os
 import time
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any, Union
+from pydantic import BaseModel
+from typing import List, Optional
 from groq import AsyncGroq
 
 app = FastAPI(
@@ -13,7 +13,6 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Enable CORS for decentralized validator and router origin access
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,18 +21,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global Configuration
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 SSL_VERIFY = os.getenv("SSL_VERIFY", "true").lower() not in ("false", "0", "no")
 GROQ_TIMEOUT = float(os.getenv("GROQ_TIMEOUT", "60.0"))
 
-# Initialize Async Groq Client
 http_client = httpx.AsyncClient(verify=SSL_VERIFY, timeout=GROQ_TIMEOUT)
 client = AsyncGroq(api_key=GROQ_API_KEY, http_client=http_client)
 
 
-# Pydantic Schemas for Standard OpenAI Chat Completion
 class ChatMessage(BaseModel):
     role: str
     content: str
@@ -50,7 +46,6 @@ class ChatCompletionRequest(BaseModel):
 
 @app.get("/health")
 async def health_check():
-    """Health endpoint pinged by canonical monitoring scripts."""
     return {
         "status": "active",
         "protocol": "telegraph",
@@ -62,14 +57,12 @@ async def health_check():
 
 @app.post("/v1/chat/completions")
 async def chat_completions(req: ChatCompletionRequest):
-    """Canonical Telegraph Intent: CHAT_COMPLETION (OpenAI Compatible API)."""
     if not GROQ_API_KEY:
         raise HTTPException(status_code=500, detail="GROQ_API_KEY is not configured on miner")
 
     try:
         formatted_messages = [{"role": msg.role, "content": msg.content} for msg in req.messages]
 
-        # Dispatch inference to Groq LPU
         completion = await client.chat.completions.create(
             messages=formatted_messages,
             model=GROQ_MODEL,
@@ -79,12 +72,19 @@ async def chat_completions(req: ChatCompletionRequest):
             stream=False
         )
 
-        # Return standard OpenAI completion structure required by validators
+        content = completion.choices[0].message.content if completion.choices else ""
+        total_tokens = completion.usage.total_tokens if completion.usage else 0
+        finish_reason = completion.choices[0].finish_reason if completion.choices else "stop"
+
+        # Returns OpenAI JSON structure mapped by semantics.signal_mapping
         return {
             "id": completion.id,
             "object": "chat.completion",
             "created": completion.created,
             "model": completion.model,
+            "output": content,  # Top-level fallback for direct signal extraction
+            "confidence": total_tokens,
+            "reason": finish_reason,
             "choices": [
                 {
                     "index": choice.index,
@@ -98,7 +98,7 @@ async def chat_completions(req: ChatCompletionRequest):
             "usage": {
                 "prompt_tokens": completion.usage.prompt_tokens if completion.usage else 0,
                 "completion_tokens": completion.usage.completion_tokens if completion.usage else 0,
-                "total_tokens": completion.usage.total_tokens if completion.usage else 0
+                "total_tokens": total_tokens
             }
         }
 
