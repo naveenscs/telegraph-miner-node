@@ -7,7 +7,8 @@ name: Telegraph Groq LPU Miner
 description: High-throughput CHAT_COMPLETION miner powered by Groq llama-3.1-8b-instant.
 
 # Replace with your live public HTTPS URL before registration
-base_url: https://shopping-baguette-cultural.ngrok-free.dev
+# base_url: https://shopping-baguette-cultural.ngrok-free.dev
+base_url: https://telegraph-miner-node.onrender.com
 
 docs:
   repository: https://github.com/naveenscs/telegraph-miner-node
