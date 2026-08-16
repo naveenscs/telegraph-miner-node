@@ -15,7 +15,7 @@ logger = logging.getLogger("telegraph-miner")
 app = FastAPI(
     title="Telegraph Miner Node",
     description="Track 1 Telegraph Protocol Miner powered by Groq LPU",
-    version="1.1.0",
+    version="1.1.1",
 )
 
 app.add_middleware(
@@ -113,10 +113,12 @@ async def _chat_completions_impl(req: ChatCompletionRequest):
         raise HTTPException(status_code=400, detail="messages must be a non-empty array")
 
     formatted_messages = [{"role": msg.role, "content": msg.content} for msg in req.messages]
-    model = req.model or GROQ_MODEL
-    # Validators sometimes send placeholder model names; fall back to configured model.
-    if model in ("string", "my-model", "null", ""):
-        model = GROQ_MODEL
+    requested_model = (req.model or GROQ_MODEL).strip()
+    # Always call Groq with the configured model. Telegraph often sends the miner
+    # slug (e.g. groq-llama31-instant-miner) or placeholders in `model`.
+    model = GROQ_MODEL
+    if requested_model != GROQ_MODEL:
+        logger.info("Ignoring client model %r; using %s", requested_model, GROQ_MODEL)
 
     start = next(_key_cycle)
     last_error: Optional[Exception] = None
