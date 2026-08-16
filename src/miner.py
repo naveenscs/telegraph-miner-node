@@ -57,6 +57,11 @@ _key_cycle = itertools.cycle(range(max(len(GROQ_API_KEYS), 1)))
 def _is_retryable(exc: Exception) -> bool:
     text = str(exc).lower()
     markers = (
+        "401",
+        "invalid api key",
+        "invalid_api_key",
+        "authentication",
+        "unauthorized",
         "429",
         "rate limit",
         "rate_limit",
