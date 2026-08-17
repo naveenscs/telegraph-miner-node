@@ -26,7 +26,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 SSL_VERIFY = os.getenv("SSL_VERIFY", "true").lower() not in ("false", "0", "no")
 GROQ_TIMEOUT = float(os.getenv("GROQ_TIMEOUT", "60.0"))
 
