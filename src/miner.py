@@ -15,7 +15,7 @@ logger = logging.getLogger("telegraph-miner")
 app = FastAPI(
     title="Telegraph Miner Node",
     description="Track 1 Telegraph Protocol Miner powered by Groq LPU",
-    version="1.1.1",
+    version="1.1.2",
 )
 
 app.add_middleware(
@@ -26,6 +26,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Groq shut down llama-3.1-8b-instant on 2026-08-16 (free/dev tier).
+# Default replacement per https://console.groq.com/docs/deprecations
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 SSL_VERIFY = os.getenv("SSL_VERIFY", "true").lower() not in ("false", "0", "no")
 GROQ_TIMEOUT = float(os.getenv("GROQ_TIMEOUT", "60.0"))
@@ -86,7 +88,7 @@ class ChatCompletionRequest(BaseModel):
     model: Optional[str] = GROQ_MODEL
     messages: List[ChatMessage]
     temperature: Optional[float] = 0.7
-    max_tokens: Optional[int] = Field(default=1024, ge=1)
+    max_tokens: Optional[int] = Field(default=512, ge=1)
     top_p: Optional[float] = 1.0
     stream: Optional[bool] = False
 
@@ -120,6 +122,9 @@ async def _chat_completions_impl(req: ChatCompletionRequest):
     if requested_model != GROQ_MODEL:
         logger.info("Ignoring client model %r; using %s", requested_model, GROQ_MODEL)
 
+    # gpt-oss can spend early tokens on reasoning; avoid empty visible output
+    max_tokens = max(req.max_tokens or 512, 256)
+
     start = next(_key_cycle)
     last_error: Optional[Exception] = None
 
@@ -131,7 +136,7 @@ async def _chat_completions_impl(req: ChatCompletionRequest):
                 messages=formatted_messages,
                 model=model,
                 temperature=req.temperature,
-                max_tokens=req.max_tokens,
+                max_tokens=max_tokens,
                 top_p=req.top_p,
                 stream=False,
             )
