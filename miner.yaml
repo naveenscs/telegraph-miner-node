@@ -4,7 +4,7 @@ id: 901
 slug: groq-llama31-instant-miner
 protocol: generic
 name: Telegraph Groq LPU Miner
-description: High-throughput CHAT_COMPLETION miner powered by Groq llama-3.1-8b-instant.
+description: High-throughput CHAT_COMPLETION miner powered by Groq openai/gpt-oss-20b.
 
 # Replace with your live public HTTPS URL before registration
 # base_url: https://shopping-baguette-cultural.ngrok-free.dev
