@@ -15,7 +15,7 @@ logger = logging.getLogger("telegraph-miner")
 app = FastAPI(
     title="Telegraph Miner Node",
     description="Track 1 Telegraph Protocol Miner powered by Groq LPU",
-    version="1.1.2",
+    version="1.1.3",
 )
 
 app.add_middleware(
@@ -31,6 +31,18 @@ app.add_middleware(
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 SSL_VERIFY = os.getenv("SSL_VERIFY", "true").lower() not in ("false", "0", "no")
 GROQ_TIMEOUT = float(os.getenv("GROQ_TIMEOUT", "60.0"))
+# Concise answers tend to score better on Telegraph CHAT_COMPLETION evals.
+SHORT_ANSWERS = os.getenv("SHORT_ANSWERS", "true").lower() not in ("false", "0", "no")
+SHORT_ANSWER_MAX_TOKENS = int(os.getenv("SHORT_ANSWER_MAX_TOKENS", "384"))
+_DEFAULT_SYSTEM_PROMPT = (
+    "You are a concise Telegraph miner. "
+    "For forecast or yes/no questions (e.g. 'Will …?'): "
+    "start with exactly one of: Yes / No / Lean yes / Lean no / Uncertain. "
+    "Then give at most 5 short sentences of support. "
+    "No markdown tables, no long essays, no bullet lists longer than 5 items. "
+    "Be decisive; avoid hedging filler."
+)
+SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", _DEFAULT_SYSTEM_PROMPT).strip()
 
 
 def _load_groq_keys() -> List[str]:
@@ -79,6 +91,15 @@ def _is_retryable(exc: Exception) -> bool:
     return any(m in text for m in markers)
 
 
+def _with_system_prompt(messages: List[dict]) -> List[dict]:
+    """Prepend concise system guidance unless the client already sent a system message."""
+    if not SHORT_ANSWERS or not SYSTEM_PROMPT:
+        return messages
+    if messages and str(messages[0].get("role", "")).lower() == "system":
+        return messages
+    return [{"role": "system", "content": SYSTEM_PROMPT}, *messages]
+
+
 class ChatMessage(BaseModel):
     role: str
     content: str
@@ -103,6 +124,7 @@ async def health_check():
         "supported_intents": ["CHAT_COMPLETION", "LANGUAGE_GENERATION", "TEXT_GENERATION"],
         "model": GROQ_MODEL,
         "groq_keys_configured": len(GROQ_API_KEYS),
+        "short_answers": SHORT_ANSWERS,
     }
 
 
@@ -114,7 +136,9 @@ async def _chat_completions_impl(req: ChatCompletionRequest):
     if not req.messages:
         raise HTTPException(status_code=400, detail="messages must be a non-empty array")
 
-    formatted_messages = [{"role": msg.role, "content": msg.content} for msg in req.messages]
+    formatted_messages = _with_system_prompt(
+        [{"role": msg.role, "content": msg.content} for msg in req.messages]
+    )
     requested_model = (req.model or GROQ_MODEL).strip()
     # Always call Groq with the configured model. Telegraph often sends the miner
     # slug (e.g. groq-llama31-instant-miner) or placeholders in `model`.
@@ -122,8 +146,13 @@ async def _chat_completions_impl(req: ChatCompletionRequest):
     if requested_model != GROQ_MODEL:
         logger.info("Ignoring client model %r; using %s", requested_model, GROQ_MODEL)
 
-    # gpt-oss can spend early tokens on reasoning; avoid empty visible output
-    max_tokens = max(req.max_tokens or 512, 256)
+    # gpt-oss can spend early tokens on reasoning; avoid empty visible output.
+    # Short-answer mode also caps completion length to reduce essay-style replies.
+    requested_max = req.max_tokens or 512
+    if SHORT_ANSWERS:
+        max_tokens = max(min(requested_max, SHORT_ANSWER_MAX_TOKENS), 256)
+    else:
+        max_tokens = max(requested_max, 256)
 
     start = next(_key_cycle)
     last_error: Optional[Exception] = None
