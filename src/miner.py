@@ -1,3 +1,4 @@
+import json
 import os
 import itertools
 import logging
@@ -5,10 +6,12 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from groq import AsyncGroq
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("telegraph-miner")
@@ -16,7 +19,7 @@ logger = logging.getLogger("telegraph-miner")
 app = FastAPI(
     title="Telegraph Miner Node",
     description="Track 1 Telegraph Protocol Miner powered by Groq LPU",
-    version="1.1.6",
+    version="1.1.7",
 )
 
 app.add_middleware(
@@ -271,18 +274,74 @@ def _pack_response(completion: Any, content: str) -> Dict[str, Any]:
     }
 
 
+def _coerce_message_content(value: Any) -> str:
+    """Normalize OpenAI-style content (str | list of parts | null) to a plain string."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: List[str] = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                if item.get("text") is not None:
+                    parts.append(str(item.get("text")))
+                elif item.get("content") is not None:
+                    parts.append(str(item.get("content")))
+                else:
+                    parts.append(json.dumps(item, ensure_ascii=False))
+            else:
+                parts.append(str(item))
+        return "\n".join(p for p in parts if p)
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
 class ChatMessage(BaseModel):
-    role: str
-    content: str
+    model_config = ConfigDict(extra="ignore")
+
+    role: str = "user"
+    content: str = ""
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def _content_to_str(cls, value: Any) -> str:
+        return _coerce_message_content(value)
 
 
 class ChatCompletionRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     model: Optional[str] = GROQ_MODEL
     messages: List[ChatMessage]
     temperature: Optional[float] = 0.7
     max_tokens: Optional[int] = Field(default=512, ge=1)
     top_p: Optional[float] = 1.0
     stream: Optional[bool] = False
+
+
+@app.exception_handler(RequestValidationError)
+async def _log_validation_error(request: Request, exc: RequestValidationError):
+    """Log rejected request bodies so 422s are diagnosable in Render logs."""
+    raw = b""
+    try:
+        raw = await request.body()
+    except Exception as body_exc:
+        logger.warning("422 could not read body: %s", body_exc)
+    body_preview = raw.decode("utf-8", errors="replace")[:4000]
+    logger.warning(
+        "422 validation failed method=%s path=%s errors=%s body=%s",
+        request.method,
+        request.url.path,
+        exc.errors(),
+        body_preview,
+    )
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 
 @app.get("/health")
