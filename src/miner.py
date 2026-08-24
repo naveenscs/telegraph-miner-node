@@ -19,7 +19,7 @@ logger = logging.getLogger("telegraph-miner")
 app = FastAPI(
     title="Telegraph Miner Node",
     description="Track 1 Telegraph Protocol Miner powered by Groq LPU",
-    version="1.1.8",
+    version="1.1.9",
 )
 
 app.add_middleware(
@@ -208,21 +208,48 @@ def _system_prompt_for_style(style: str) -> Optional[str]:
     return None
 
 
+def _base_style(style: str) -> str:
+    """Strip '+client_system' (or similar) suffix for ladder/temperature decisions."""
+    return (style or "as_is").split("+", 1)[0]
+
+
 def _prepare_messages(messages: List[dict]) -> Tuple[List[dict], str]:
-    """Attach GT-match style prompt when adaptive; mild default when unsure."""
-    if messages and str(messages[0].get("role", "")).lower() == "system":
-        return messages, "client_system"
+    """Attach GT-match style prompt; still apply when client already sent a system message."""
+    if not ADAPTIVE_STYLE:
+        if SHORT_ANSWERS and SYSTEM_PROMPT:
+            if messages and str(messages[0].get("role", "")).lower() == "system":
+                merged = list(messages)
+                client_sys = str(merged[0].get("content") or "")
+                merged[0] = {
+                    "role": "system",
+                    "content": (client_sys + "\n\n" + SYSTEM_PROMPT).strip()
+                    if client_sys
+                    else SYSTEM_PROMPT,
+                }
+                return merged, "legacy_short+client_system"
+            return [{"role": "system", "content": SYSTEM_PROMPT}, *messages], "legacy_short"
+        return messages, "as_is"
 
-    if ADAPTIVE_STYLE:
-        style = _classify_question(_last_user_text(messages))
-        prompt = _system_prompt_for_style(style)
-        if prompt:
-            return [{"role": "system", "content": prompt}, *messages], style
-        return messages, style
+    style = _classify_question(_last_user_text(messages))
+    prompt = _system_prompt_for_style(style)
+    has_client_system = bool(
+        messages and str(messages[0].get("role", "")).lower() == "system"
+    )
+    tag = f"{style}+client_system" if has_client_system else style
 
-    if SHORT_ANSWERS and SYSTEM_PROMPT:
-        return [{"role": "system", "content": SYSTEM_PROMPT}, *messages], "legacy_short"
-    return messages, "as_is"
+    if not prompt:
+        return messages, tag
+
+    if has_client_system:
+        merged = list(messages)
+        client_sys = str(merged[0].get("content") or "")
+        merged[0] = {
+            "role": "system",
+            "content": (client_sys + "\n\n" + prompt).strip() if client_sys else prompt,
+        }
+        return merged, tag
+
+    return [{"role": "system", "content": prompt}, *messages], style
 
 
 def _token_budgets(requested_max: Optional[int], style: str = "as_is") -> List[int]:
@@ -230,7 +257,7 @@ def _token_budgets(requested_max: Optional[int], style: str = "as_is") -> List[i
     floor = TOKEN_LADDER[0]
     ceiling = TOKEN_LADDER[-1]
     start = max(floor, requested_max or floor)
-    if style in ("explain", "howto") and len(TOKEN_LADDER) > 1:
+    if _base_style(style) in ("explain", "howto") and len(TOKEN_LADDER) > 1:
         start = max(start, TOKEN_LADDER[1])
     begin: Optional[int] = None
     for step in TOKEN_LADDER:
@@ -382,7 +409,7 @@ async def _chat_completions_impl(req: ChatCompletionRequest):
 
     budgets = _token_budgets(req.max_tokens, style=style)
     temperature = req.temperature if req.temperature is not None else 0.7
-    if style in ("explain", "howto", "default"):
+    if _base_style(style) in ("explain", "howto", "default"):
         temperature = min(temperature, EXPLAIN_TEMPERATURE)
     logger.info(
         "style=%s token_ladder=%s temperature=%s (client max_tokens=%s)",
