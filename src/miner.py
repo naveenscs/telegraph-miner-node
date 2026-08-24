@@ -19,7 +19,7 @@ logger = logging.getLogger("telegraph-miner")
 app = FastAPI(
     title="Telegraph Miner Node",
     description="Track 1 Telegraph Protocol Miner powered by Groq LPU",
-    version="1.1.7",
+    version="1.1.8",
 )
 
 app.add_middleware(
@@ -51,9 +51,10 @@ TOKEN_LADDER = [
 # reference answer (on-topic, general, enough length), not maximal brevity.
 _GT_CORE = (
     "Match a typical reference / ground-truth answer: accurate, on-topic, "
-    "general (not a niche digression), plain prose. Aim for roughly 80–250 "
-    "characters of substance unless the question clearly needs more. "
-    "No markdown tables, no filler, no apologies."
+    "general (not a niche digression), plain prose like a textbook or API doc. "
+    "Aim for roughly 80–250 characters of substance unless the question clearly "
+    "needs more. No markdown (no bold/italics/bullets unless asked), no filler, "
+    "no apologies."
 )
 PROMPT_FORECAST = (
     "You are a Telegraph miner. "
@@ -65,9 +66,11 @@ PROMPT_EXPLAIN = (
     "You are a Telegraph miner. "
     + _GT_CORE
     + " For definition / explain / compare questions: one clear textbook-style "
-    "paragraph (two short ones max). Prefer the common general definition; "
-    "do not digress into niche variants unless asked. Bullets only if the "
-    "question asks for a list."
+    "paragraph (two short ones max). Prefer the common general definition from "
+    "standard docs; do not digress into niche variants unless asked. "
+    "When explaining chat/API message roles: system = standing instructions; "
+    "user = human input; assistant = prior model turns already in the messages "
+    "list (conversation history), not only the next reply being generated."
 )
 PROMPT_HOWTO = (
     "You are a Telegraph miner. "
@@ -86,6 +89,8 @@ PROMPT_EXPLAIN = os.getenv("PROMPT_EXPLAIN", PROMPT_EXPLAIN).strip()
 PROMPT_HOWTO = os.getenv("PROMPT_HOWTO", PROMPT_HOWTO).strip()
 PROMPT_DEFAULT = os.getenv("PROMPT_DEFAULT", PROMPT_DEFAULT).strip()
 SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", PROMPT_DEFAULT).strip()
+# Lower temperature for definition-style answers (closer to GT wording).
+EXPLAIN_TEMPERATURE = float(os.getenv("EXPLAIN_TEMPERATURE", "0.25"))
 
 
 def _load_groq_keys() -> List[str]:
@@ -376,10 +381,14 @@ async def _chat_completions_impl(req: ChatCompletionRequest):
         logger.info("Ignoring client model %r; using %s", requested_model, GROQ_MODEL)
 
     budgets = _token_budgets(req.max_tokens, style=style)
+    temperature = req.temperature if req.temperature is not None else 0.7
+    if style in ("explain", "howto", "default"):
+        temperature = min(temperature, EXPLAIN_TEMPERATURE)
     logger.info(
-        "style=%s token_ladder=%s (client max_tokens=%s)",
+        "style=%s token_ladder=%s temperature=%s (client max_tokens=%s)",
         style,
         budgets,
+        temperature,
         req.max_tokens,
     )
 
@@ -395,7 +404,7 @@ async def _chat_completions_impl(req: ChatCompletionRequest):
                 completion = await client.chat.completions.create(
                     messages=formatted_messages,
                     model=model,
-                    temperature=req.temperature,
+                    temperature=temperature,
                     max_tokens=max_tokens,
                     top_p=req.top_p,
                     stream=False,
