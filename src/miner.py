@@ -19,7 +19,7 @@ logger = logging.getLogger("telegraph-miner")
 app = FastAPI(
     title="Telegraph Miner Node",
     description="Track 1 Telegraph Protocol Miner powered by Groq LPU",
-    version="1.1.9",
+    version="1.2.0",
 )
 
 app.add_middleware(
@@ -56,6 +56,26 @@ _GT_CORE = (
     "needs more. No markdown (no bold/italics/bullets unless asked), no filler, "
     "no apologies."
 )
+# GT cluster: chat completion / OpenAI-style messages API (roles, history, window).
+_CHAT_API_FACTS = (
+    "If the question is about chat completion, chat models, message roles, "
+    "conversation history, multi-turn chat, context windows, or system prompts: "
+    "answer like an API doc. Key facts — "
+    "(1) Stateless: the model does not retain memory between separate API calls. "
+    "(2) Multi-turn context: on every request the client resends the messages "
+    "list (full history, or as much as fits); the model reads that list each time "
+    "to stay consistent with prior turns — not an internal long-term memory. "
+    "(3) Roles: system = standing instructions/behavior; user = human input; "
+    "assistant = prior model replies already in the messages list (history), "
+    "not only the next reply being generated. "
+    "(4) Context window: the prior-message token budget the model can attend to "
+    "when producing the next reply. "
+    "(5) Separate system prompt: persistent developer instructions kept apart "
+    "from user turns so they are not mixed into or overridden by dialogue. "
+    "(6) Over limit: oldest messages are truncated/dropped, or the request errors; "
+    "early turns may be lost. Prefer these facts over 'the model remembers' or "
+    "vague sliding-window metaphors unless the question asks for that."
+)
 PROMPT_FORECAST = (
     "You are a Telegraph miner. "
     + _GT_CORE
@@ -68,21 +88,21 @@ PROMPT_EXPLAIN = (
     + " For definition / explain / compare questions: one clear textbook-style "
     "paragraph (two short ones max). Prefer the common general definition from "
     "standard docs; do not digress into niche variants unless asked. "
-    "When explaining chat/API message roles: system = standing instructions; "
-    "user = human input; assistant = prior model turns already in the messages "
-    "list (conversation history), not only the next reply being generated."
+    + _CHAT_API_FACTS
 )
 PROMPT_HOWTO = (
     "You are a Telegraph miner. "
     + _GT_CORE
     + " For how / process questions: explain the standard mechanism in order "
-    "using short paragraphs or up to 5 numbered steps."
+    "using short paragraphs or up to 5 numbered steps. "
+    + _CHAT_API_FACTS
 )
 PROMPT_DEFAULT = (
     "You are a Telegraph miner. "
     + _GT_CORE
     + " Answer the question directly in one short paragraph unless steps or "
-    "a list are clearly required."
+    "a list are clearly required. "
+    + _CHAT_API_FACTS
 )
 PROMPT_FORECAST = os.getenv("PROMPT_FORECAST", PROMPT_FORECAST).strip()
 PROMPT_EXPLAIN = os.getenv("PROMPT_EXPLAIN", PROMPT_EXPLAIN).strip()
@@ -146,6 +166,21 @@ def _last_user_text(messages: List[dict]) -> str:
     return str(messages[-1].get("content") or "") if messages else ""
 
 
+def _is_chat_api_question(low: str) -> bool:
+    """Detect OpenAI-style chat/completion API fact questions (GT cluster)."""
+    return bool(
+        re.search(
+            r"\b("
+            r"chat completion|chat model|chat api|message(?:s)? (?:list|format|role)|"
+            r"system prompt|conversation history|context window|multi-?turn|"
+            r"system,\s*user,\s*(?:and )?assistant|role(?:s)? in (?:a )?chat|"
+            r"maintain context|across (?:multiple )?turns"
+            r")\b",
+            low,
+        )
+    )
+
+
 def _classify_question(text: str) -> str:
     """Return style: forecast | explain | howto | default (mild GT-match)."""
     q = " ".join((text or "").strip().split())
@@ -155,6 +190,11 @@ def _classify_question(text: str) -> str:
 
     if re.search(r"\b(yes or no|true or false)\b", low):
         return "forecast"
+
+    # Chat-API facts score best as short textbook paragraphs (explain), even when
+    # phrased as "How does …" (otherwise howto wins and misses GT wording).
+    if _is_chat_api_question(low):
+        return "explain"
 
     if re.search(r"\bwill\b.+\?", low) or re.match(
         r"^(will|is|are|can|should|do|does)\b", low
