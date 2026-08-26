@@ -19,7 +19,7 @@ logger = logging.getLogger("telegraph-miner")
 app = FastAPI(
     title="Telegraph Miner Node",
     description="Track 1 Telegraph Protocol Miner powered by Groq LPU",
-    version="1.2.0",
+    version="1.2.1",
 )
 
 app.add_middleware(
@@ -60,21 +60,28 @@ _GT_CORE = (
 _CHAT_API_FACTS = (
     "If the question is about chat completion, chat models, message roles, "
     "conversation history, multi-turn chat, context windows, or system prompts: "
-    "answer like an API doc. Key facts — "
+    "answer like an API doc. Prefer GT-style wording. Key facts — "
     "(1) Stateless: the model does not retain memory between separate API calls. "
     "(2) Multi-turn context: on every request the client resends the messages "
     "list (full history, or as much as fits); the model reads that list each time "
     "to stay consistent with prior turns — not an internal long-term memory. "
     "(3) Roles: system = standing instructions/behavior; user = human input; "
     "assistant = prior model replies already in the messages list (history), "
-    "not only the next reply being generated. "
-    "(4) Context window: the prior-message token budget the model can attend to "
-    "when producing the next reply. "
-    "(5) Separate system prompt: persistent developer instructions kept apart "
-    "from user turns so they are not mixed into or overridden by dialogue. "
-    "(6) Over limit: oldest messages are truncated/dropped, or the request errors; "
-    "early turns may be lost. Prefer these facts over 'the model remembers' or "
-    "vague sliding-window metaphors unless the question asks for that."
+    "not only the next reply being generated. Role is the label on each message "
+    "telling the model who produced it and how to weigh that content. "
+    "(4) Context window / conversation history: the sequence of prior messages "
+    "the model can attend to for the next reply — so it can reference earlier "
+    "statements, keep topic continuity, and avoid contradicting or repeating "
+    "itself. It is resent with each request because the model is stateless. "
+    "(5) Separate system prompt: a distinct channel for persistent developer "
+    "instructions, persona, or constraints that apply throughout the conversation "
+    "without being mixed into or overridden by the user's own input — independent "
+    "of the dialogue turns. "
+    "(6) Over context limit: when history + new input exceed the max context "
+    "length, the request fails with an error, or earlier messages are truncated, "
+    "summarized, or dropped to fit; the model then loses access to the removed "
+    "turns. Prefer these facts over 'the model remembers' or vague sliding-window "
+    "metaphors unless the question asks for that."
 )
 PROMPT_FORECAST = (
     "You are a Telegraph miner. "
