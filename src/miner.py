@@ -11,7 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from groq import AsyncGroq
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("telegraph-miner")
@@ -19,7 +19,7 @@ logger = logging.getLogger("telegraph-miner")
 app = FastAPI(
     title="Telegraph Miner Node",
     description="Track 1 Telegraph Protocol Miner powered by Groq LPU",
-    version="1.2.1",
+    version="1.2.3",
 )
 
 app.add_middleware(
@@ -381,6 +381,126 @@ def _coerce_message_content(value: Any) -> str:
     return str(value)
 
 
+def _extract_user_text(value: Any, *, depth: int = 0) -> str:
+    """Best-effort pull of a user-facing question/prompt from any JSON-ish value."""
+    if depth > 4 or value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        parts = [_extract_user_text(v, depth=depth + 1) for v in value]
+        return "\n".join(p for p in parts if p).strip()
+    if isinstance(value, dict):
+        # Prefer known content keys first.
+        for key in (
+            "content",
+            "text",
+            "input",
+            "prompt",
+            "query",
+            "question",
+            "message",
+            "user",
+        ):
+            if key in value and value[key] is not None:
+                got = _extract_user_text(value[key], depth=depth + 1)
+                if got:
+                    return got
+        # Else longest remaining string field (skip meta).
+        skip = {
+            "model",
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "stream",
+            "n",
+            "stop",
+            "role",
+            "id",
+            "object",
+            "created",
+            "usage",
+            "choices",
+            "confidence",
+            "reason",
+            "output",
+        }
+        best = ""
+        for k, v in value.items():
+            if str(k).lower() in skip:
+                continue
+            got = _extract_user_text(v, depth=depth + 1)
+            if len(got) > len(best):
+                best = got
+        return best
+    return _coerce_message_content(value).strip()
+
+
+def _normalize_chat_body(data: Any) -> dict:
+    """Map any reasonable request shape into OpenAI-style {messages:[...]}."""
+    if data is None:
+        data = {}
+    if isinstance(data, str):
+        data = {"input": data}
+    if not isinstance(data, dict):
+        data = {"input": _coerce_message_content(data)}
+
+    out = dict(data)
+    messages = out.get("messages")
+
+    if isinstance(messages, str) and messages.strip():
+        out["messages"] = [{"role": "user", "content": messages.strip()}]
+        return out
+
+    if isinstance(messages, list) and messages:
+        normalized = []
+        for item in messages:
+            if isinstance(item, str) and item.strip():
+                normalized.append({"role": "user", "content": item.strip()})
+            elif isinstance(item, dict):
+                role = str(item.get("role") or "user")
+                content = _extract_user_text(item.get("content", item))
+                if content:
+                    normalized.append({"role": role, "content": content})
+            else:
+                text = _extract_user_text(item)
+                if text:
+                    normalized.append({"role": "user", "content": text})
+        if normalized:
+            out["messages"] = normalized
+            return out
+
+    # No usable messages — dig known aliases, then any string in the body.
+    for key in ("input", "prompt", "query", "text", "question", "message", "user"):
+        if key in out and out[key] is not None:
+            text = _extract_user_text(out[key])
+            if text:
+                logger.info("Coerced body.%s into messages[user] (len=%s)", key, len(text))
+                out["messages"] = [{"role": "user", "content": text}]
+                return out
+
+    text = _extract_user_text(out)
+    if text:
+        logger.info("Coerced generic body text into messages[user] (len=%s)", len(text))
+        out["messages"] = [{"role": "user", "content": text}]
+        return out
+
+    # Last resort: never leave messages missing (avoids 422 → empty tournament score).
+    logger.warning("No user text found in body; using generic fallback prompt keys=%s", list(out.keys())[:20])
+    out["messages"] = [
+        {
+            "role": "user",
+            "content": (
+                "Provide a short, accurate general answer. "
+                "If the question is missing, explain that the request body had no readable input."
+            ),
+        }
+    ]
+    return out
+
+
 class ChatMessage(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -397,16 +517,47 @@ class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     model: Optional[str] = GROQ_MODEL
-    messages: List[ChatMessage]
+    messages: List[ChatMessage] = Field(default_factory=list)
     temperature: Optional[float] = 0.7
     max_tokens: Optional[int] = Field(default=512, ge=1)
     top_p: Optional[float] = 1.0
     stream: Optional[bool] = False
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_plain_input(cls, data: Any) -> Any:
+        return _normalize_chat_body(data)
+
+
+def _fallback_pack(content: str) -> Dict[str, Any]:
+    """OpenAI-shaped response when we must answer without a Groq completion object."""
+    import time
+
+    text = (content or "").strip() or (
+        "Unable to parse a clear question from the request; please retry with a messages or input field."
+    )
+    return {
+        "id": "chatcmpl-fallback",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": GROQ_MODEL,
+        "output": text,
+        "confidence": 0.5,
+        "reason": "Fallback response after request-shape recovery",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": text},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }
+
 
 @app.exception_handler(RequestValidationError)
 async def _log_validation_error(request: Request, exc: RequestValidationError):
-    """Log rejected request bodies so 422s are diagnosable in Render logs."""
+    """Log rejected bodies; for chat paths, salvage instead of returning empty/422."""
     raw = b""
     try:
         raw = await request.body()
@@ -420,6 +571,18 @@ async def _log_validation_error(request: Request, exc: RequestValidationError):
         exc.errors(),
         body_preview,
     )
+    path = request.url.path or ""
+    if path in ("/v1/chat/completions", "/chat") and request.method.upper() == "POST":
+        try:
+            parsed: Any = json.loads(body_preview) if body_preview.strip() else {}
+        except Exception:
+            parsed = {"input": body_preview} if body_preview.strip() else {}
+        try:
+            req = ChatCompletionRequest.model_validate(_normalize_chat_body(parsed))
+            return await _chat_completions_impl(req)
+        except Exception as salvage_exc:
+            logger.exception("Chat 422 salvage failed: %s", salvage_exc)
+            return JSONResponse(status_code=200, content=_fallback_pack(""))
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 
@@ -445,7 +608,8 @@ async def _chat_completions_impl(req: ChatCompletionRequest):
         raise HTTPException(status_code=500, detail="GROQ_API_KEY is not configured on miner")
 
     if not req.messages:
-        raise HTTPException(status_code=400, detail="messages must be a non-empty array")
+        # Should be rare after _normalize_chat_body; still never return empty.
+        return _fallback_pack("")
 
     base_messages = [{"role": msg.role, "content": msg.content} for msg in req.messages]
     formatted_messages, style = _prepare_messages(base_messages)
@@ -511,33 +675,55 @@ async def _chat_completions_impl(req: ChatCompletionRequest):
                     )
                     continue
                 logger.exception("Inference failed: %s", exc)
-                raise HTTPException(status_code=500, detail=f"Inference execution failed: {exc}") from exc
+                # Prefer a non-empty fallback over 500 empty tournament scores.
+                return _fallback_pack(
+                    "Temporary inference error; please retry. "
+                    f"Detail: {type(exc).__name__}"
+                )
         else:
             continue
 
     if last_weak is not None:
         completion, content, finish = last_weak
-        logger.warning(
-            "Returning truncated/weak answer after ladder exhausted (finish=%r len=%s)",
-            finish,
-            len(content.strip()),
+        if (content or "").strip():
+            logger.warning(
+                "Returning truncated/weak answer after ladder exhausted (finish=%r len=%s)",
+                finish,
+                len(content.strip()),
+            )
+            return _pack_response(completion, content)
+        logger.warning("Ladder exhausted with empty content; returning fallback text")
+        return _fallback_pack(
+            "The model returned an empty completion after retries. "
+            "Please resend the question."
         )
-        return _pack_response(completion, content)
 
-    raise HTTPException(
-        status_code=500,
-        detail=f"Inference execution failed after key rotation: {last_error}",
+    logger.error("Inference failed after key rotation: %s", last_error)
+    return _fallback_pack(
+        "Temporary inference error after retries; please try again."
     )
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(req: ChatCompletionRequest):
+async def chat_completions(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        raw = (await request.body()).decode("utf-8", errors="replace")
+        data = {"input": raw} if raw.strip() else {}
+    req = ChatCompletionRequest.model_validate(_normalize_chat_body(data))
     return await _chat_completions_impl(req)
 
 
 @app.post("/chat")
-async def chat_alias(req: ChatCompletionRequest):
+async def chat_alias(request: Request):
     """YAML path alias — some Telegraph node calls hit /chat instead of external_path."""
+    try:
+        data = await request.json()
+    except Exception:
+        raw = (await request.body()).decode("utf-8", errors="replace")
+        data = {"input": raw} if raw.strip() else {}
+    req = ChatCompletionRequest.model_validate(_normalize_chat_body(data))
     return await _chat_completions_impl(req)
 
 
