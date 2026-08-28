@@ -19,7 +19,7 @@ logger = logging.getLogger("telegraph-miner")
 app = FastAPI(
     title="Telegraph Miner Node",
     description="Track 1 Telegraph Protocol Miner powered by Groq LPU",
-    version="1.2.3",
+    version="1.2.4",
 )
 
 app.add_middleware(
@@ -80,7 +80,14 @@ _CHAT_API_FACTS = (
     "(6) Over context limit: when history + new input exceed the max context "
     "length, the request fails with an error, or earlier messages are truncated, "
     "summarized, or dropped to fit; the model then loses access to the removed "
-    "turns. Prefer these facts over 'the model remembers' or vague sliding-window "
+    "turns. "
+    "(7) Single-turn vs multi-turn: a single-turn prompt is one self-contained "
+    "input that produces one response with no expectation of continued dialogue. "
+    "A multi-turn chat exchange is a sequence of related messages where later "
+    "responses build on and reference earlier ones. When asked for that "
+    "difference, lead with this dialogue definition; mention resent message "
+    "lists only as brief supporting API detail. "
+    "Prefer these facts over 'the model remembers' or vague sliding-window "
     "metaphors unless the question asks for that."
 )
 PROMPT_FORECAST = (
@@ -179,7 +186,7 @@ def _is_chat_api_question(low: str) -> bool:
         re.search(
             r"\b("
             r"chat completion|chat model|chat api|message(?:s)? (?:list|format|role)|"
-            r"system prompt|conversation history|context window|multi-?turn|"
+            r"system prompt|conversation history|context window|multi-?turn|single-?turn|"
             r"system,\s*user,\s*(?:and )?assistant|role(?:s)? in (?:a )?chat|"
             r"maintain context|across (?:multiple )?turns"
             r")\b",
@@ -637,7 +644,9 @@ async def _chat_completions_impl(req: ChatCompletionRequest):
     for budget_i, max_tokens in enumerate(budgets):
         for attempt in range(len(GROQ_API_KEYS)):
             key = GROQ_API_KEYS[(start + attempt) % len(GROQ_API_KEYS)]
-            client = AsyncGroq(api_key=key, http_client=_http_client)
+            # max_retries=0: on 429 raise immediately so we rotate keys instead of
+            # waiting on the SDK's same-key backoff (saw 1–8s retries under burst).
+            client = AsyncGroq(api_key=key, http_client=_http_client, max_retries=0)
             try:
                 completion = await client.chat.completions.create(
                     messages=formatted_messages,
@@ -669,7 +678,7 @@ async def _chat_completions_impl(req: ChatCompletionRequest):
                 last_error = exc
                 if _is_retryable(exc) and attempt + 1 < len(GROQ_API_KEYS):
                     logger.warning(
-                        "Groq call failed on key index %s (%s); rotating key",
+                        "Groq call failed on key index %s (%s); rotating key immediately",
                         (start + attempt) % len(GROQ_API_KEYS),
                         exc,
                     )
