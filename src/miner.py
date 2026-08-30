@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import itertools
@@ -19,7 +20,7 @@ logger = logging.getLogger("telegraph-miner")
 app = FastAPI(
     title="Telegraph Miner Node",
     description="Track 1 Telegraph Protocol Miner powered by Groq LPU",
-    version="1.2.4",
+    version="1.2.5",
 )
 
 app.add_middleware(
@@ -148,6 +149,8 @@ def _load_groq_keys() -> List[str]:
 GROQ_API_KEYS = _load_groq_keys()
 _http_client = httpx.AsyncClient(verify=SSL_VERIFY, timeout=GROQ_TIMEOUT)
 _key_cycle = itertools.cycle(range(max(len(GROQ_API_KEYS), 1)))
+# Extra 429 sleep-retries beyond one pass over keys (same-org keys share TPM).
+GROQ_RATE_LIMIT_ROUNDS = max(1, int(os.getenv("GROQ_RATE_LIMIT_ROUNDS", "8")))
 
 
 def _is_retryable(exc: Exception) -> bool:
@@ -171,6 +174,28 @@ def _is_retryable(exc: Exception) -> bool:
         "cloudflare",
     )
     return any(m in text for m in markers)
+
+
+def _is_rate_limit(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(
+        m in text
+        for m in ("429", "rate limit", "rate_limit", "too many requests", "tokens per minute", "tpm")
+    )
+
+
+def _rate_limit_wait_seconds(exc: Exception) -> Optional[float]:
+    """Parse Groq's 'Please try again in X.Xs / Yms' hint; cap to keep tournament latency sane."""
+    text = str(exc)
+    m = re.search(r"try again in ([0-9]*\.?[0-9]+)\s*ms", text, re.I)
+    if m:
+        return min(float(m.group(1)) / 1000.0 + 0.15, 6.0)
+    m = re.search(r"try again in ([0-9]*\.?[0-9]+)\s*s", text, re.I)
+    if m:
+        return min(float(m.group(1)) + 0.2, 6.0)
+    if _is_rate_limit(exc):
+        return 1.25
+    return None
 
 
 def _last_user_text(messages: List[dict]) -> str:
@@ -640,12 +665,13 @@ async def _chat_completions_impl(req: ChatCompletionRequest):
     start = next(_key_cycle)
     last_error: Optional[Exception] = None
     last_weak: Optional[Tuple[Any, str, Optional[str]]] = None
+    # Same-org API keys share TPM — spinning all keys on 429 is useless. Sleep using
+    # Groq's retry hint, then retry (still rotate key index for multi-org setups).
+    attempt_budget = max(len(GROQ_API_KEYS), GROQ_RATE_LIMIT_ROUNDS)
 
     for budget_i, max_tokens in enumerate(budgets):
-        for attempt in range(len(GROQ_API_KEYS)):
+        for attempt in range(attempt_budget):
             key = GROQ_API_KEYS[(start + attempt) % len(GROQ_API_KEYS)]
-            # max_retries=0: on 429 raise immediately so we rotate keys instead of
-            # waiting on the SDK's same-key backoff (saw 1–8s retries under burst).
             client = AsyncGroq(api_key=key, http_client=_http_client, max_retries=0)
             try:
                 completion = await client.chat.completions.create(
@@ -676,15 +702,25 @@ async def _chat_completions_impl(req: ChatCompletionRequest):
                 return _pack_response(completion, content or "")
             except Exception as exc:
                 last_error = exc
-                if _is_retryable(exc) and attempt + 1 < len(GROQ_API_KEYS):
+                wait = _rate_limit_wait_seconds(exc) if _is_rate_limit(exc) else None
+                if wait is not None and attempt + 1 < attempt_budget:
                     logger.warning(
-                        "Groq call failed on key index %s (%s); rotating key immediately",
+                        "Groq 429 on key index %s; sleeping %.2fs then retry (attempt %s/%s)",
+                        (start + attempt) % len(GROQ_API_KEYS),
+                        wait,
+                        attempt + 1,
+                        attempt_budget,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                if _is_retryable(exc) and attempt + 1 < attempt_budget:
+                    logger.warning(
+                        "Groq call failed on key index %s (%s); rotating key",
                         (start + attempt) % len(GROQ_API_KEYS),
                         exc,
                     )
                     continue
                 logger.exception("Inference failed: %s", exc)
-                # Prefer a non-empty fallback over 500 empty tournament scores.
                 return _fallback_pack(
                     "Temporary inference error; please retry. "
                     f"Detail: {type(exc).__name__}"
@@ -707,7 +743,7 @@ async def _chat_completions_impl(req: ChatCompletionRequest):
             "Please resend the question."
         )
 
-    logger.error("Inference failed after key rotation: %s", last_error)
+    logger.error("Inference failed after retries: %s", last_error)
     return _fallback_pack(
         "Temporary inference error after retries; please try again."
     )
