@@ -20,7 +20,7 @@ logger = logging.getLogger("telegraph-miner")
 app = FastAPI(
     title="Telegraph Miner Node",
     description="Track 1 Telegraph Protocol Miner powered by Groq LPU",
-    version="1.2.5",
+    version="1.2.6",
 )
 
 app.add_middleware(
@@ -149,7 +149,7 @@ def _load_groq_keys() -> List[str]:
 GROQ_API_KEYS = _load_groq_keys()
 _http_client = httpx.AsyncClient(verify=SSL_VERIFY, timeout=GROQ_TIMEOUT)
 _key_cycle = itertools.cycle(range(max(len(GROQ_API_KEYS), 1)))
-# Extra 429 sleep-retries beyond one pass over keys (same-org keys share TPM).
+# Max attempts under 429 pressure (rotate across keys; sleep only after a full pass).
 GROQ_RATE_LIMIT_ROUNDS = max(1, int(os.getenv("GROQ_RATE_LIMIT_ROUNDS", "8")))
 
 
@@ -665,13 +665,17 @@ async def _chat_completions_impl(req: ChatCompletionRequest):
     start = next(_key_cycle)
     last_error: Optional[Exception] = None
     last_weak: Optional[Tuple[Any, str, Optional[str]]] = None
-    # Same-org API keys share TPM — spinning all keys on 429 is useless. Sleep using
-    # Groq's retry hint, then retry (still rotate key index for multi-org setups).
-    attempt_budget = max(len(GROQ_API_KEYS), GROQ_RATE_LIMIT_ROUNDS)
+    n_keys = len(GROQ_API_KEYS)
+    # Multi-org: on 429 try next key immediately; sleep only after every key
+    # in a pass returns 429, then retry in order. attempt_budget ≈ a few full passes.
+    attempt_budget = max(n_keys, GROQ_RATE_LIMIT_ROUNDS)
 
     for budget_i, max_tokens in enumerate(budgets):
+        consecutive_429 = 0
+        pass_wait = 0.0
         for attempt in range(attempt_budget):
-            key = GROQ_API_KEYS[(start + attempt) % len(GROQ_API_KEYS)]
+            key_i = (start + attempt) % n_keys
+            key = GROQ_API_KEYS[key_i]
             client = AsyncGroq(api_key=key, http_client=_http_client, max_retries=0)
             try:
                 completion = await client.chat.completions.create(
@@ -702,21 +706,38 @@ async def _chat_completions_impl(req: ChatCompletionRequest):
                 return _pack_response(completion, content or "")
             except Exception as exc:
                 last_error = exc
-                wait = _rate_limit_wait_seconds(exc) if _is_rate_limit(exc) else None
-                if wait is not None and attempt + 1 < attempt_budget:
-                    logger.warning(
-                        "Groq 429 on key index %s; sleeping %.2fs then retry (attempt %s/%s)",
-                        (start + attempt) % len(GROQ_API_KEYS),
-                        wait,
-                        attempt + 1,
-                        attempt_budget,
-                    )
-                    await asyncio.sleep(wait)
+                if _is_rate_limit(exc) and attempt + 1 < attempt_budget:
+                    consecutive_429 += 1
+                    wait = _rate_limit_wait_seconds(exc) or 1.25
+                    pass_wait = max(pass_wait, wait)
+                    if consecutive_429 >= n_keys:
+                        logger.warning(
+                            "Groq 429 on all %s key(s); sleeping %.2fs then retry in order "
+                            "(attempt %s/%s, last key index %s)",
+                            n_keys,
+                            pass_wait,
+                            attempt + 1,
+                            attempt_budget,
+                            key_i,
+                        )
+                        await asyncio.sleep(pass_wait)
+                        consecutive_429 = 0
+                        pass_wait = 0.0
+                    else:
+                        logger.warning(
+                            "Groq 429 on key index %s; trying next key immediately "
+                            "(attempt %s/%s)",
+                            key_i,
+                            attempt + 1,
+                            attempt_budget,
+                        )
                     continue
                 if _is_retryable(exc) and attempt + 1 < attempt_budget:
+                    consecutive_429 = 0
+                    pass_wait = 0.0
                     logger.warning(
                         "Groq call failed on key index %s (%s); rotating key",
-                        (start + attempt) % len(GROQ_API_KEYS),
+                        key_i,
                         exc,
                     )
                     continue
