@@ -47,6 +47,8 @@ TOKEN_LADDER = [
     for x in os.getenv("TOKEN_LADDER", _DEFAULT_TOKEN_LADDER).split(",")
     if x.strip().isdigit()
 ] or [512, 768, 1024]
+# gpt-oss often returns finish_reason=length with ample visible text; only re-roll when short.
+LENGTH_ESCALATE_MIN_CHARS = max(1, int(os.getenv("LENGTH_ESCALATE_MIN_CHARS", "120")))
 
 # GT-match-first: WASM scores ~50% cosine vs ground truth. Optimize for a typical
 # reference answer (on-topic, general, enough length), not maximal brevity.
@@ -353,7 +355,7 @@ def _completion_unsatisfactory(content: Optional[str], finish_reason: Optional[s
     if not text:
         return True
     if (finish_reason or "").lower() == "length":
-        return True
+        return len(text) < LENGTH_ESCALATE_MIN_CHARS
     return False
 
 
